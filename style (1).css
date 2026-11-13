@@ -1,0 +1,54 @@
+const tg = window.Telegram?.WebApp;
+if (tg) { tg.ready(); tg.expand(); try { tg.setHeaderColor("#09090c"); tg.setBackgroundColor("#09090c"); } catch(e){} }
+let state = null, tab = "home", initData = tg?.initData || "";
+const $ = s => document.querySelector(s);
+const fmt = n => `${Number(n||0).toLocaleString("ru-RU")} ₽`;
+function toast(msg){const el=$("#toast");el.textContent=msg;el.classList.add("show");setTimeout(()=>el.classList.remove("show"),2600)}
+async function api(path, body){
+  const r=await fetch(path,{method:body?"POST":"GET",headers:{"Content-Type":"application/json","Authorization":"tma "+initData},body:body?JSON.stringify(body):undefined});
+  const data=await r.json().catch(()=>({detail:"Ошибка сервера"}));
+  if(!r.ok) throw new Error(data.detail||"Ошибка запроса");
+  return data;
+}
+async function load(){
+  if(!initData){$("#loading").innerHTML='<div style="font-size:42px">📲</div><b>Открой игру через Telegram</b><small style="color:#aaa">Для авторизации запусти Mini App из чата с ботом.</small>';return}
+  try{state=await api("/api/me");render();$("#loading").classList.add("hidden")}
+  catch(e){$("#loading").innerHTML=`<b>Не удалось загрузить игру</b><small>${e.message}</small><button class="gold-btn" onclick="location.reload()">Повторить</button>`}
+}
+async function act(payload){
+  try{const result=await api("/api/action",payload);state=result.state;render();toast(result.message);if(tg)tg.HapticFeedback?.notificationOccurred("success")}
+  catch(e){toast(e.message);if(tg)tg.HapticFeedback?.notificationOccurred("error")}
+}
+function render(){
+ const p=state.player;
+ $("#playerName").textContent=p.name;$("#level").textContent=p.level;$("#balance").textContent=fmt(p.balance);$("#balance2").textContent=fmt(p.balance);
+ $("#income").textContent=fmt(state.income_hour);$("#pending").textContent=fmt(state.pending);
+ $("#xptext").textContent=`${p.xp} / ${p.next_xp} XP`;$("#xpbar").style.width=Math.min(100,p.xp/p.next_xp*100)+"%";
+ document.querySelectorAll(".nav").forEach(b=>b.classList.toggle("active",b.dataset.tab===tab));
+ $("#sectionTitle").textContent=({home:"Твой бизнес",shop:"Магазин империи",jobs:"Криминальные дела",top:"Рейтинг игроков",tasks:"Ежедневные задания"})[tab];
+ const home=$("#homeAssets"), view=$("#view");home.classList.toggle("hidden",tab!=="home");view.classList.toggle("hidden",tab==="home");
+ if(tab==="home"){
+  home.innerHTML=state.assets.map(a=>`<article class="asset-card panel"><div class="asset-art">${a.icon}</div><div class="asset-info"><div class="asset-top"><b>${esc(a.name)}</b><span class="level">УР. ${a.level}</span></div><p>Прибыль: ${fmt(a.income*a.level)}/час · накоплено ${fmt(a.pending)}</p><div class="asset-actions"><small>● Активен</small>${a.income?`<button class="mini-btn" data-up="${a.id}">УЛУЧШИТЬ · ${fmt(a.upgrade_cost)}</button>`:""}</div></div></article>`).join("") || '<div class="panel empty">Пока нет имущества. Загляни в магазин и построй свою империю.</div>';
+ } else if(tab==="shop"){
+  view.innerHTML=`<div class="view-grid">${state.catalog.map(a=>{let owned=state.assets.some(x=>x.key===a.key);return `<article class="tile panel"><div class="emoji">${a.image}</div><b>${esc(a.name)}</b><small>${a.income?fmt(a.income)+"/час":`+${a.bonus}% к наградам`}</small><br><small>${fmt(a.price)}</small><br><button class="mini-btn" data-buy="${a.key}" ${owned?"disabled":""}>${owned?"КУПЛЕНО":"КУПИТЬ"}</button></article>`}).join("")}</div>`;
+ } else if(tab==="jobs"){
+  view.innerHTML=state.jobs.map(j=>{let locked=p.level<j.lvl;return `<article class="job-card panel ${locked?"locked":""}"><span class="emoji">${j.icon}</span><div class="details"><b>${esc(j.name)}</b><small>Награда ${fmt(j.reward[0])}–${fmt(j.reward[1])} · риск ${Math.round(j.fail*100)}% · +${j.xp} XP</small><small>${locked?"Требуется уровень "+j.lvl:"Доступно сейчас"}</small></div><button class="mini-btn" data-job="${j.index}" ${locked||p.job_wait>0?"disabled":""}>${locked?"ЗАКРЫТО":p.job_wait>0?p.job_wait+" СЕК":"НАЧАТЬ"}</button></article>`}).join("")+`<div class="panel empty">Успешно: ${p.jobs_done} · Провалено: ${p.jobs_failed}</div>`;
+ } else if(tab==="top"){
+  view.innerHTML='<div class="panel empty">Загрузка рейтинга…</div>';
+  api("/api/top").then(rows=>{if(tab!=="top")return;view.innerHTML=rows.map((r,i)=>`<div class="ranking panel"><b>${["🥇","🥈","🥉"][i]||("#"+(i+1))} ${esc(r.name)} ${r.is_me?"· ВЫ":""}</b><small>${fmt(r.balance)}</small></div>`).join("")||'<div class="panel empty">Пока нет игроков</div>'}).catch(e=>toast(e.message));
+ } else {
+  view.innerHTML=`<article class="task-row panel"><span class="emoji">🎁</span><div class="details"><b>Ежедневная награда</b><small>Забирай бонус каждый день · ${fmt(1000*p.level)}</small></div><button class="mini-btn" data-daily ${p.daily_ready?"":"disabled"}>${p.daily_ready?"ЗАБРАТЬ":"ПОЛУЧЕНО"}</button></article><article class="task-row panel"><span class="emoji">💼</span><div class="details"><b>Развивай империю</b><small>Покупай бизнес и увеличивай доход</small></div></article>`;
+ }
+}
+function esc(s){return String(s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]))}
+document.addEventListener("click",e=>{
+ const nav=e.target.closest("[data-tab]");if(nav){tab=nav.dataset.tab;render();return}
+ const buy=e.target.closest("[data-buy]");if(buy)return act({action:"buy",key:buy.dataset.buy});
+ const up=e.target.closest("[data-up]");if(up)return act({action:"upgrade",asset_id:Number(up.dataset.up)});
+ const job=e.target.closest("[data-job]");if(job)return act({action:"job",job_index:Number(job.dataset.job)});
+ if(e.target.closest("[data-action=collect]"))return act({action:"collect"});
+ if(e.target.closest("[data-daily]"))return act({action:"daily"});
+});
+$("#refresh").addEventListener("click",async()=>{try{state=await api("/api/me");render();toast("Данные обновлены")}catch(e){toast(e.message)}});
+load();
+setInterval(()=>{if(state&&tab==="jobs")render()},5000);
